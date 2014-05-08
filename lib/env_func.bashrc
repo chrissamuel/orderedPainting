@@ -7,14 +7,17 @@
 #
 #######################################################################################
 
-QUEUE_TYPE="SGE"
-QSUB_COMMON="qsub -cwd "
-MAX_MEMORY="-l s_vmem=8G -l mem_req=8"
+#QUEUE_TYPE="SGE"
+#QSUB_COMMON="qsub -cwd "
+#MAX_MEMORY="-l s_vmem=8G -l mem_req=8"
 
 #QUEUE_TYPE="LSF"
 #QSUB_COMMON="bsub "
 #MAX_MEMORY="-M 8000000"
 
+QUEUE_TYPE="SLURM"
+QSUB_COMMON="sbatch"
+MAX_MEMORY="--mem-per-cpu=8000"
 
 #######################################################################################
 # common functions

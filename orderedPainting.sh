@@ -7,11 +7,16 @@ usage () {
     echo "qsub -cwd  <<< '"
   elif [ "${QUEUE_TYPE}" == "LSF" ]; then
     echo "bsub -o logfile.txt <<< '"
+  elif [ "${QUEUE_TYPE}" == "SLURM" ]; then
+    echo "sbatch --output logfile.txt <<< '#!/bin/bash $0"
   else
     echo_fail "unknown QUEUE_TYPE: ${QUEUE_TYPE}"
   fi
 
-  echo "/bin/bash $0 "
+  if [ "${QUEUE_TYPE}" != "SLURM" ]; then
+    echo "/bin/bash $0 "
+  fi
+
   echo "  -g file.hap "
   echo "  -l strainName.list (individual name in the hap file)" 
   echo " [-n 20 (num. of dirs where uncompressed tmp files are processed simultaneously: default=20) ]"
@@ -127,6 +132,8 @@ returnQSUB_CMD() {
     QSUB_CMD="${QSUB_COMMON} -o $1.log -e $1.log -N $1"
   elif [ "${QUEUE_TYPE}" == "LSF" ]; then
     QSUB_CMD="${QSUB_COMMON} -o $1.log -e $1.log -J $1"
+  elif [ "${QUEUE_TYPE}" == "SLURM" ]; then
+    QSUB_CMD="${QSUB_COMMON} --output $1.log --error $1.log --job-name=$1"
   fi
   
   if test "$2" = "" ; then
@@ -136,6 +143,8 @@ returnQSUB_CMD() {
       QSUB_CMD="${QSUB_CMD} -t $2:$3"
     elif [ "${QUEUE_TYPE}" == "LSF" ]; then
       QSUB_CMD="${QSUB_CMD}[$2-$3]"
+    elif [ "${QUEUE_TYPE}" == "SLURM" ]; then
+      QSUB_CMD="${QSUB_CMD} --array=$2-$3"
     fi
   fi
   echo ${QSUB_CMD}
@@ -143,7 +152,11 @@ returnQSUB_CMD() {
 
 submit_calcAveDist_ordering() {
   CMD=`returnQSUB_CMD ${STAMP}`
-  CMD=${CMD}" <<< '"
+  if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+    CMD=${CMD}" --wrap '"
+  else
+    CMD=${CMD}" <<< '"
+  fi
   CMD=${CMD}" perl ${PL_SITE_BY_SITE}"
   CMD=${CMD}" -g ${PHASEFILE} "
   CMD=${CMD}" -d ${ORDER_DIR_LIST} "
@@ -172,8 +185,12 @@ submit_calcAveDist_ordering() {
 wait_until_finish() {
   while :
   do
-    QSTAT_CMD=qstat
-    END_CHECK=`${QSTAT_CMD} | grep -e $1 -e 'not ready yet' | wc -l`
+    if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+      QSTAT_CMD="squeue -u $USER -o %j"
+    else
+      QSTAT_CMD="qstat | grep -e $1 -e 'not ready yet'"
+    fi
+    END_CHECK=`${QSTAT_CMD} | grep -e $1 | wc -l`
     if [ "${END_CHECK}" -eq 0 ]; then
       break
     fi
@@ -190,7 +207,13 @@ submit_msort_each_ordering() {
     ARRAY_E=9
 
     CMD=`returnQSUB_CMD ${STAMP} ${ARRAY_S} ${ARRAY_E}`
+    if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+      CMD=${CMD}" --wrap '"
+    fi
     CMD=${CMD}" ${PL_MSORT_EACH_ORDERING} -d ${arr_dirs_for_msort[$i_dir]} -g ${PHASEFILE} "
+    if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+      CMD=${CMD}"'"
+    fi
     echo ${CMD}
     eval ${CMD}
     if [ $? -ne 0 ]; then 
@@ -527,7 +550,11 @@ else
     out_prefix_ind=${OUT_PREFIX_BASE}_${ind}
 
     CMD=`returnQSUB_CMD ${STAMP}`
-    CMD=${CMD}" <<< '"
+    if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+      CMD=${CMD}" --wrap '"
+    else
+      CMD=${CMD}" <<< '"
+    fi
     CMD=${CMD}"${EXE_PAINT} -i ${NUM_EM} -in -n 1 -a $ind $ind -j -g $PHASEFILE -r $RECOMB_FNANE -o ${OUT_DIR_linked1_est}/${out_prefix_ind}"
     CMD=${CMD}"'"
     echo ${CMD}
@@ -881,17 +908,25 @@ do
       
       CMD=`returnQSUB_CMD ${STAMP} ${ARRAY_S} ${ARRAY_E}`
       #CMD=${CMD}" -t 1:${NUM_TARGET_HAP} "
+      if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+        CMD=${CMD}" --wrap '"
+      fi
       CMD=${CMD}" ${SH_PAINT_QSUB}"
       CMD=${CMD}"  -r ${RECOMB_FNANE}"
       CMD=${CMD}"  -n ${N_e_FNAME}"
       CMD=${CMD}"  -l ${TARGET_HAP_LIST}"
+      if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+        CMD=${CMD}"'"
+      fi
 
       echo ${CMD}
-      QSUB_MSG=`${CMD}`
+      # This used to use backticks but that broke Slurm support due to losing
+      # some quotation marks and resulting in sbatch complaining about arguments
+      # to the command to be run.  The output it was capturing was not used either.
+      eval ${CMD}
       if [ $? -ne 0 ]; then 
         echo_fail "Execution error: ${CMD} (step${STEP}) "
       fi
-      #QSUB_ID=`echo ${QSUB_MSG} | perl -pe 's/ \(.*$//g' | perl -pe 's/^.* //g' | perl -pe 's/\..*$//g'`
     fi
 
   fi
@@ -1006,8 +1041,14 @@ do
     if [ "${NUM_TARGET_GZ}" -gt 0 ]; then
       CMD=`returnQSUB_CMD ${STAMP} ${ARRAY_S} ${ARRAY_E}`
       #CMD=${CMD}" -t 1:${NUM_TARGET_GZ} "
+      if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+        CMD=${CMD}" --wrap '"
+      fi
       CMD=${CMD}" ${SH_DECOMPRESS_SORT_SPLIT_EACH_ORDERING}"
       CMD=${CMD}"  -l ${TARGET_GZ_LIST}"
+      if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+        CMD=${CMD}"'"
+      fi
 
       echo ${CMD}
       QSUB_MSG=`${CMD}`
@@ -1209,7 +1250,11 @@ if [ "${SKIP_FLAG}" -eq 0 ]; then
 
   CMD=`returnQSUB_CMD ${STAMP}` 
   CMD=${CMD}" ${MAX_MEMORY} " # ${MAX_MEMORY} is used only here
-  CMD=${CMD}" <<< '"
+  if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+    CMD=${CMD}" --wrap '"
+  else
+    CMD=${CMD}" <<< '"
+  fi
   CMD=${CMD}"perl ${PL_SITE_BY_SITE}"
   CMD=${CMD}" -g ${PHASEFILE} "
   CMD=${CMD}" -d ${ORDER_DIR_LIST} "
@@ -1333,10 +1378,16 @@ if [ "${OUTPUT_REPRESENTATIVES}" == "TRUE" ]; then
 
       CMD=`returnQSUB_CMD ${STAMP} ${ARRAY_S} ${ARRAY_E}`
       #CMD=${CMD}" -t 1:${NUM_TARGET_POS} "
+      if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+        CMD=${CMD}" --wrap '"
+      fi
       CMD=${CMD}" ${SH_R_MAIN2}"
       CMD=${CMD}"  -a ${MIN}"
       CMD=${CMD}"  -b ${MAX}"
       CMD=${CMD}"  -l ${VISUALIZE_TYPE_DIR}.list"
+      if [ "${QUEUE_TYPE}" == "SLURM" ]; then
+        CMD=${CMD}" '"
+      fi
    
       echo ${CMD}
       #QSUB_MSG=`${CMD}`
